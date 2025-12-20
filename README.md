@@ -1,2 +1,2 @@
-# End-to-End-Data-Pipeline-for-User-Behavior-and-Trending-Analytics
+# Cloud-Data-Foundation-End-to-End-DWH
 Cloud-Native Data Lake to Warehouse Pipeline
