@@ -18,7 +18,7 @@ def _spark_connect_s3_test(etl_date=None):
             etl_date = str(etl_date)
 
         # Create spark session
-        spark = create_spark_s3_session(_spark_connect_s3_test)
+        spark = create_spark_s3_session("_spark_connect_s3_test")
 
         print("Testing S3 connection ...")
 

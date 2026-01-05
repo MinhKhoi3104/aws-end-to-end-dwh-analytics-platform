@@ -17,7 +17,7 @@ def _030101_customer_search(etl_date=None):
             etl_date = str(etl_date)
 
         # Create spark session
-        spark = create_spark_s3_session(_030101_customer_search)
+        spark = create_spark_s3_session("_030101_customer_search")
 
         # Build S3 path according to etl_date
         s3_path = (

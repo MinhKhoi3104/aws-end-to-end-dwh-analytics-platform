@@ -17,7 +17,7 @@ def _spark_connect_redshift_test(etl_date=None):
             etl_date = str(etl_date)
 
         # Create spark session
-        spark = create_spark_redshift_session(_spark_connect_redshift_test)
+        spark = create_spark_redshift_session("_spark_connect_redshift_test")
 
         print("Testing Redshift connection ...")
 
