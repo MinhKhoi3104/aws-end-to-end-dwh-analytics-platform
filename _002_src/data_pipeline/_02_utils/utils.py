@@ -8,26 +8,39 @@ from _01_config.data_storage_config import *
 from _01_config.jar_paths import *
 
 # Using to create spark session at Bronze Layer
-def create_spark_s3_session(appName):
-    spark = (
-            SparkSession.builder
-            .appName(appName)
-            .config("spark.jars", f"{HADOOP_AWS_JAR_PATH},{AWS_JAVA_SDK_BUNDLE_JAR_PATH}")
-            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-            .config(
-                "spark.hadoop.fs.s3a.aws.credentials.provider",
-                "com.amazonaws.auth.profile.ProfileCredentialsProvider"
-            )
-            .config(
-                "spark.hadoop.fs.s3a.profile",
-                "default"
-            )
-            .config(
-                "spark.hadoop.fs.s3a.endpoint",
-                "s3.ap-southeast-1.amazonaws.com"
-            )
-            .getOrCreate()
+def create_bronze_spark_session(appName):
+    """Auto-select credentials based on environment"""
+    
+    # Detect environment
+    is_airflow = os.getenv("AIRFLOW_ENV", "false") == "true"
+    
+    builder = (
+        SparkSession.builder
+        .appName(appName)
+        .config("spark.jars.packages", 
+                "org.apache.hadoop:hadoop-aws:3.3.4,"
+                "com.amazonaws:aws-java-sdk-bundle:1.12.262")
+        .config("spark.hadoop.fs.s3a.impl", 
+                "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.endpoint",
+                "s3.ap-southeast-1.amazonaws.com")
+    )
+    
+    if is_airflow:
+        print("🚀 Running in AIRFLOW - using IAM Role")
+        builder = builder.config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "com.amazonaws.auth.InstanceProfileCredentialsProvider"
         )
+    else:
+        print("💻 Running LOCALLY - using AWS Profile")
+        builder = builder.config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "com.amazonaws.auth.profile.ProfileCredentialsProvider"
+        ).config("spark.hadoop.fs.s3a.profile", "default")
+    
+    spark = builder.getOrCreate()
+    spark.sparkContext.setLogLevel("ERROR")
     return spark
 
 # Execute SQL DDL/DML directly in Redshift
@@ -55,50 +68,63 @@ def execute_sql_ddl(spark, sql_query):
 
 
 # Using to create spark session at Silver Layer
-def create_spark_iceberg_session(appName):
+def create_silver_spark_session(appName: str):
     """
-    Create Spark session for Silver Layer - S3 + Iceberg
-    Args:
-        appName: Application name
-        warehouse_path: S3 path for Iceberg warehouse (ex: s3a://bucket/iceberg-warehouse)
+    Works for:
+    - Local (AWS profile)
+    - Airflow (IAM Role)
     """
-    spark = (
+
+    is_airflow = os.getenv("AIRFLOW_HOME") is not None
+
+    builder = (
         SparkSession.builder
         .appName(appName)
-        # JARs cho S3
-        .config("spark.jars", 
-                f"{HADOOP_AWS_JAR_PATH},"
-                f"{AWS_JAVA_SDK_BUNDLE_JAR_PATH},"
-                f"{ICEBERG_SPARK_RUNTIME_JAR_PATH}")
-        
-        # S3 configs
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+
+        # ===== Iceberg =====
         .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "com.amazonaws.auth.profile.ProfileCredentialsProvider"
+            "spark.sql.extensions",
+            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
         )
-        
-        # Iceberg configs
-        .config("spark.sql.extensions", 
-                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-        .config("spark.sql.catalog.spark_catalog", 
-                "org.apache.iceberg.spark.SparkSessionCatalog")
-        .config("spark.sql.catalog.spark_catalog.type", "hive")
-        .config("spark.sql.catalog.local", 
-                "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.local.type", "hadoop")
-        .config("spark.sql.catalog.local.warehouse", "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse")
-        
-        # Optional: Enable Iceberg features
-        .config("spark.sql.catalog.local.io-impl", 
-                "org.apache.iceberg.aws.s3.S3FileIO")
-        
-        .getOrCreate()
+        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.iceberg.type", "hadoop")
+        .config(
+            "spark.sql.catalog.iceberg.warehouse",
+            "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse"
+        )
+        .config(
+            "spark.sql.catalog.iceberg.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO"
+        )
+
+        # ===== S3 =====
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.endpoint", "s3.ap-southeast-1.amazonaws.com")
     )
+
+    if is_airflow:
+        print("🚀 Airflow environment → IAM Role")
+        builder = builder.config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+        )
+    else:
+        print("💻 Local environment → AWS profile")
+        builder = (
+            builder
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.profile.ProfileCredentialsProvider"
+            )
+            .config("spark.hadoop.fs.s3a.profile", "default")
+        )
+
+    spark = builder.getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
     return spark
 
-# Using to create spark session at Silver Layer
-def create_spark_redshift_session(appName):
+# Using to create spark session at Gold Layer
+def create_gold_spark_session(appName):
     """Gold: Redshift + Iceberg"""
     spark = (
         SparkSession.builder
@@ -111,10 +137,10 @@ def create_spark_redshift_session(appName):
                 "com.amazonaws.auth.profile.ProfileCredentialsProvider")
         .config("spark.sql.extensions", 
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-        .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.local.type", "hadoop")
-        .config("spark.sql.catalog.local.warehouse", "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse")
-        .config("spark.sql.catalog.local.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        .config("spark.sql.catalog.prod", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.prod.type", "hadoop")
+        .config("spark.sql.catalog.prod.warehouse", "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse")
+        .config("spark.sql.catalog.prod.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
         .config("spark.databricks.redshift.jdbc.url", REDSHIFT_JDBC['url'])
         .config("spark.databricks.redshift.tempdir", REDSHIFT_JDBC['tempdir'])
         .getOrCreate()
