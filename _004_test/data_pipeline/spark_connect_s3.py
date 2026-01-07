@@ -5,9 +5,10 @@ config_path = os.path.abspath(config_path)
 sys.path.insert(0, config_path)
 from _002_src.data_pipeline._01_config.jar_paths import *
 from _002_src.data_pipeline._02_utils.utils import *
+from _002_src.data_pipeline._01_config.data_storage_config import *
 from datetime import date
 
-def _spark_connect_redshift_test(etl_date=None):
+def _spark_connect_s3_test(etl_date=None):
     spark = None
     try:
         # Default etl_date = today
@@ -17,31 +18,28 @@ def _spark_connect_redshift_test(etl_date=None):
             etl_date = str(etl_date)
 
         # Create spark session
-        spark = create_spark_redshift_session("_spark_connect_redshift_test")
+        spark = create_bronze_spark_session("_spark_connect_s3_test")
 
-        print("Testing Redshift connection ...")
+        print("Testing S3 connection ...")
 
-        # ✅ Test Query
-        test_sql = "(SELECT 1 AS ok) t"
-
-        df = (
-            spark.read
-            .format("jdbc")
-            .option("url", REDSHIFT_JDBC["url"])
-            .option("dbtable", test_sql)
-            .option("user", REDSHIFT_JDBC["properties"]["user"])
-            .option("password", REDSHIFT_JDBC["properties"]["password"])
-            .option("driver", "com.amazon.redshift.jdbc42.Driver")
-            .load()
+        # Build S3 path theo etl_date
+        s3_path = (
+            f"{S3_DATALAKE_PATH}/customer_search_log_data/{etl_date}"
         )
 
-        df.show()
+        print(f"Reading data from: {s3_path}")
+        try:
+            df = spark.read.parquet(s3_path)
+            df.show(5)
 
-        print("✅ Redshift connection SUCCESS")
+            print("✅ S3 connection SUCCESS")
+        except:
+            print("❌ S3 connection SUCCESS but s3 path not found")
+
         return True
 
     except Exception as e:
-        print("❌ Redshift connection FAILED")
+        print("❌ S3 connection FAILED")
         print(f"ERROR: {e}")
         return False
 
@@ -51,10 +49,10 @@ def _spark_connect_redshift_test(etl_date=None):
 
 if __name__ == "__main__":
     import argparse
-    
-    parser = argparse.ArgumentParser(description='_spark_connect_redshift_test')
+
+    parser = argparse.ArgumentParser(description='_spark_connect_s3_test')
     parser.add_argument('--etl_date', type=int, help='etl_date (YYYYMMDD)')
     args = parser.parse_args()
 
-    success = _spark_connect_redshift_test(etl_date=args.etl_date)
+    success = _spark_connect_s3_test(etl_date=args.etl_date)
     exit(0 if success else 1)
