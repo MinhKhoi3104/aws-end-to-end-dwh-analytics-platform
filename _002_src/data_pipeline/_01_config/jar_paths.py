@@ -8,3 +8,4 @@ AWS_JAVA_SDK_BUNDLE_JAR_PATH = "/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar
 
 # Iceberg JAR
 ICEBERG_SPARK_RUNTIME_JAR_PATH = "/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.5.2.jar"
+ICEBERG_AWS_BUNDLE_JAR_PATH = "/opt/spark/jars/iceberg-aws-bundle-1.5.2.jar"

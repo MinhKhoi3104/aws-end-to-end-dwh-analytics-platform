@@ -3,7 +3,7 @@ current_dir = os.path.dirname(__file__)
 config_path = os.path.join(current_dir, '..')
 config_path = os.path.abspath(config_path)
 sys.path.insert(0, config_path)
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
 from _01_config.data_storage_config import *
 from _01_config.jar_paths import *
 
@@ -12,14 +12,13 @@ def create_bronze_spark_session(appName):
     """Auto-select credentials based on environment"""
     
     # Detect environment
-    is_airflow = os.getenv("AIRFLOW_ENV", "false") == "true"
+    is_airflow = os.getenv("AIRFLOW_HOME") is not None
     
     builder = (
         SparkSession.builder
         .appName(appName)
-        .config("spark.jars.packages", 
-                "org.apache.hadoop:hadoop-aws:3.3.4,"
-                "com.amazonaws:aws-java-sdk-bundle:1.12.262")
+        .config("spark.jars", 
+                f"{HADOOP_AWS_JAR_PATH},{AWS_JAVA_SDK_BUNDLE_JAR_PATH}")
         .config("spark.hadoop.fs.s3a.impl", 
                 "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config("spark.hadoop.fs.s3a.endpoint",
@@ -44,35 +43,59 @@ def create_bronze_spark_session(appName):
     return spark
 
 # Execute SQL DDL/DML directly in Redshift
-def execute_sql_ddl(spark, sql_query):
+def execute_sql_ddl(spark, sql_query: str) -> None:
+    """
+    Execute DDL SQL on Redshift via JDBC using Spark JVM.
+    If any error occurs → raise exception and stop the job.
+    """
+
     jvm = spark._jvm
+    connection = None
+    statement = None
 
     try:
+        jvm.java.lang.Class.forName(
+            "com.amazon.redshift.jdbc.Driver"
+        )
+
         DriverManager = jvm.java.sql.DriverManager
+
         connection = DriverManager.getConnection(
             REDSHIFT_JDBC["url"],
             REDSHIFT_JDBC["properties"]["user"],
             REDSHIFT_JDBC["properties"]["password"]
         )
+
         statement = connection.createStatement()
         statement.execute(sql_query)
-        return True
+
+        print(f"✅ Executed SQL on Redshift: {sql_query}")
 
     except Exception as e:
-        print(f"❌ Error executing SQL on Redshift: {e}")
-        return False
+        print("❌ Error executing SQL on Redshift")
+        print(f"❌ SQL: {sql_query}")
+
+        raise RuntimeError(
+            f"Failed to execute Redshift DDL: {sql_query}"
+        ) from e
 
     finally:
-        if 'connection' in locals() and connection:
-            connection.close()
+        try:
+            if statement:
+                statement.close()
+            if connection:
+                connection.close()
+        except Exception:
+            pass
 
 
 # Using to create spark session at Silver Layer
 def create_silver_spark_session(appName: str):
     """
-    Works for:
-    - Local (AWS profile)
-    - Airflow (IAM Role)
+    Silver layer:
+    - Parquet on S3
+    - Overwrite strategy
+    - Local (AWS profile) & Airflow (IAM Role)
     """
 
     is_airflow = os.getenv("AIRFLOW_HOME") is not None
@@ -81,42 +104,39 @@ def create_silver_spark_session(appName: str):
         SparkSession.builder
         .appName(appName)
 
-        # ===== Iceberg =====
+        # ===== Hadoop S3A (AWS SDK v1) =====
         .config(
-            "spark.sql.extensions",
-            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
-        )
-        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.iceberg.type", "hadoop")
-        .config(
-            "spark.sql.catalog.iceberg.warehouse",
-            "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse"
+            "spark.jars",
+            f"{HADOOP_AWS_JAR_PATH},{AWS_JAVA_SDK_BUNDLE_JAR_PATH}"
         )
         .config(
-            "spark.sql.catalog.iceberg.io-impl",
-            "org.apache.iceberg.aws.s3.S3FileIO"
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem"
         )
-
-        # ===== S3 =====
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.endpoint", "s3.ap-southeast-1.amazonaws.com")
+        .config(
+            "spark.hadoop.fs.s3a.endpoint",
+            "s3.ap-southeast-1.amazonaws.com"
+        )
     )
 
     if is_airflow:
-        print("🚀 Airflow environment → IAM Role")
-        builder = builder.config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "com.amazonaws.auth.InstanceProfileCredentialsProvider"
-        )
+        print("🚀 Silver on Airflow → IAM Role (Hadoop default)")
+        # ❗ KHÔNG set credentials provider
+        # Hadoop sẽ tự detect Instance Profile
+        pass
+
     else:
-        print("💻 Local environment → AWS profile")
+        print("💻 Silver Local → AWS Profile")
         builder = (
             builder
             .config(
                 "spark.hadoop.fs.s3a.aws.credentials.provider",
                 "com.amazonaws.auth.profile.ProfileCredentialsProvider"
             )
-            .config("spark.hadoop.fs.s3a.profile", "default")
+            .config(
+                "spark.hadoop.fs.s3a.profile",
+                "default"
+            )
         )
 
     spark = builder.getOrCreate()
@@ -124,32 +144,89 @@ def create_silver_spark_session(appName: str):
     return spark
 
 # Using to create spark session at Gold Layer
-def create_gold_spark_session(appName):
-    """Gold: Redshift + Iceberg"""
-    spark = (
+def create_gold_spark_session(appName: str):
+    """
+    Gold:
+    - Read Iceberg (S3)
+    - Write Redshift
+    - Works for Local & Airflow
+    """
+
+    is_airflow = os.getenv("AIRFLOW_HOME") is not None
+
+    builder = (
         SparkSession.builder
         .appName(appName)
-        .config("spark.jars", 
-                f"{HADOOP_AWS_JAR_PATH},{AWS_JAVA_SDK_BUNDLE_JAR_PATH},"
-                f"{ICEBERG_SPARK_RUNTIME_JAR_PATH},{REDSHIFT_JDBC_JAR_PATH},{SPARK_REDSHIFT_JAR_PATH}")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider",
-                "com.amazonaws.auth.profile.ProfileCredentialsProvider")
-        .config("spark.sql.extensions", 
-                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-        .config("spark.sql.catalog.prod", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.prod.type", "hadoop")
-        .config("spark.sql.catalog.prod.warehouse", "s3a://data-pipeline-e2e-datalake-98c619f9/iceberg-warehouse")
-        .config("spark.sql.catalog.prod.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
-        .config("spark.databricks.redshift.jdbc.url", REDSHIFT_JDBC['url'])
-        .config("spark.databricks.redshift.tempdir", REDSHIFT_JDBC['tempdir'])
-        .getOrCreate()
+        .config(
+            "spark.jars",
+            ",".join([
+                # Hadoop S3A (AWS SDK v1)
+                HADOOP_AWS_JAR_PATH,
+                AWS_JAVA_SDK_BUNDLE_JAR_PATH,
+
+                # Iceberg (AWS SDK v2)
+                ICEBERG_SPARK_RUNTIME_JAR_PATH,
+                ICEBERG_AWS_BUNDLE_JAR_PATH,
+
+                # Redshift
+                REDSHIFT_JDBC_JAR_PATH,
+                SPARK_REDSHIFT_JAR_PATH,
+            ])
+        )
+
+        # ===== Iceberg =====
+        .config(
+            "spark.sql.extensions",
+            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+        )
+        .config(
+            "spark.sql.catalog.iceberg",
+            "org.apache.iceberg.spark.SparkCatalog"
+        )
+        .config(
+            "spark.sql.catalog.iceberg.type",
+            "hadoop"
+        )
+        .config(
+            "spark.sql.catalog.iceberg.warehouse",
+            S3_ICEBERG_PATH
+        )
+        .config(
+            "spark.sql.catalog.iceberg.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO"
+        )
+
+        # ===== Hadoop S3A =====
+        .config(
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem"
+        )
     )
 
-    # set log level WARN to reduce unnessary uotput line
-    spark.sparkContext.setLogLevel("WARN")
+    if is_airflow:
+        print("🚀 Gold on Airflow → IAM Role")
+        # ❗ KHÔNG set fs.s3a.aws.credentials.provider
+        # Hadoop sẽ tự detect Instance Profile
+        pass
 
+    else:
+        print("💻 Gold Local → AWS Profile")
+        builder = (
+            builder
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.profile.ProfileCredentialsProvider"
+            )
+            .config(
+                "spark.hadoop.fs.s3a.profile",
+                "default"
+            )
+        )
+
+    spark = builder.getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
     return spark
+
 
 # Create S3 object if not exist
 def ensure_s3_prefix(spark,s3_path):
@@ -175,3 +252,17 @@ def ensure_s3_prefix(spark,s3_path):
         return print(message)
     except Exception as e:
         return print(f"❌ ERROR: {e}")
+    
+# Write data to redshift
+def write_to_redshift(df: DataFrame,table_name: str,mode: str):
+    df.write \
+        .format("io.github.spark_redshift_community.spark.redshift") \
+        .option("url", REDSHIFT_JDBC["url"]) \
+        .option("dbtable", table_name) \
+        .option("user", REDSHIFT_JDBC["properties"]["user"]) \
+        .option("password", REDSHIFT_JDBC["properties"]["password"]) \
+        .option("tempdir", REDSHIFT_JDBC["url"]) \
+        .mode(mode) \
+        .save()
+
+    print(f"✅ Successfully wrote DataFrame to Redshift table: {table_name}")
