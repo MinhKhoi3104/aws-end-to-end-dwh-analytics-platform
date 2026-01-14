@@ -1,4 +1,10 @@
-from pathlib import Path
+import os, sys
+current_dir = os.path.dirname(__file__)
+config_path = os.path.join(current_dir, '..')
+config_path = os.path.abspath(config_path)
+sys.path.insert(0, config_path)
+from data_pipeline._01_config.jar_paths import *
+from data_pipeline._02_utils.utils import *
 import requests
 import time
 import pandas as pd
@@ -79,7 +85,7 @@ while True:
     page += 1
     time.sleep(0.3)
     
-OUTPUT = Path("_000_data") / "crawl_data" / "rophim_all_movie_movies.parquet"
+OUTPUT = f"{S3_DATALAKE_PATH}/crawl_data/rophim_all_movie_movies"
 
 
 # Convert sang DataFrame
@@ -96,18 +102,18 @@ for col in df.columns:
     if df[col].dtype == "object":
         df[col] = df[col].astype(str)
 
-
-
-if OUTPUT.exists():
-    df_old = pd.read_parquet(OUTPUT)
+try:
+    df_old = pd.read_parquet(OUTPUT, engine="pyarrow")
     df = pd.concat([df_old, df], ignore_index=True)
     df = df.drop_duplicates(subset="_id", keep="last")
+except Exception:
+    # First run or no existing parquet
+    pass
 
-# Ghi ra Parquet
+# Ghi parquet (OVERWRITE)
 df.to_parquet(
     OUTPUT,
     engine="pyarrow",
-    compression="snappy",
     index=False
 )
 
