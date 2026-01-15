@@ -9,7 +9,9 @@ assume_role_policy = <<EOF
     {
       "Action": "sts:AssumeRole",
       "Principal": {
-        "Service": "redshift.amazonaws.com"
+        "Service": 
+        ["redshift.amazonaws.com",
+        "redshift-serverless.amazonaws.com"]
       },
       "Effect": "Allow",
       "Sid": ""

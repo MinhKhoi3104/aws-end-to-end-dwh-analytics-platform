@@ -66,6 +66,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "project_bucket_lifecycle" {
       noncurrent_days = 90
     }
   }
+  rule {
+    id     = "redshift-temp-expire"
+    status = "Enabled"
+
+    filter {
+      prefix = "redshift-temp/"
+    }
+
+    expiration {
+      days = 1
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 
   depends_on = [
     aws_s3_bucket_versioning.project_bucket_versioning
