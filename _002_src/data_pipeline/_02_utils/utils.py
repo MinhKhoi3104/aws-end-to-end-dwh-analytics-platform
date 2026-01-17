@@ -170,7 +170,7 @@ def create_gold_spark_session(appName: str):
 
                 # Redshift
                 REDSHIFT_JDBC_JAR_PATH,
-                SPARK_REDSHIFT_JAR_PATH,
+                SPARK_REDSHIFT_JAR_PATH
             ])
         )
 
@@ -254,15 +254,38 @@ def ensure_s3_prefix(spark,s3_path):
     
 # Write data to redshift
 def write_to_redshift(df: DataFrame,table_name: str,mode: str):
-    df.write \
-        .format("io.github.spark_redshift_community.spark.redshift") \
-        .option("url", REDSHIFT_JDBC["url"]) \
-        .option("aws_iam_role", REDSHIFT_IAM_ROLE_ARN) \
-        .option("dbtable", table_name) \
-        .option("user", REDSHIFT_JDBC["properties"]["user"]) \
-        .option("password", REDSHIFT_JDBC["properties"]["password"]) \
-        .option("tempdir", REDSHIFT_JDBC["tempdir"]) \
-        .mode(mode) \
-        .save()
+    df.write\
+    .format("io.github.spark_redshift_community.spark.redshift") \
+    .option("url", REDSHIFT_JDBC["url"]) \
+    .option("aws_iam_role", REDSHIFT_IAM_ROLE_ARN) \
+    .option("dbtable", table_name) \
+    .option("user", REDSHIFT_JDBC["properties"]["user"]) \
+    .option("password", REDSHIFT_JDBC["properties"]["password"]) \
+    .option("tempdir", REDSHIFT_JDBC["tempdir"]) \
+    .mode(mode) \
+    .save()
 
     print(f"✅ Successfully wrote DataFrame to Redshift table: {table_name}")
+
+# Read data from Redshift
+def read_from_redshift(
+    spark,
+    table_name: str
+) -> DataFrame:
+    """
+    Read data from Redshift into Spark DataFrame
+    """
+    df = (
+    spark.read
+    .format("jdbc")
+    .option("url", REDSHIFT_JDBC["url"])
+    .option("dbtable", "gold.dim_category")
+    .option("user", REDSHIFT_JDBC["properties"]["user"])
+    .option("password", REDSHIFT_JDBC["properties"]["password"])
+    .option("driver", "com.amazon.redshift.jdbc.Driver")
+    .load()
+    )
+
+    print(f"✅ Successfully read Redshift table: {table_name}")
+
+    return df
