@@ -77,10 +77,9 @@ def test_030201_user_plans_map(etl_date=None):
         
         # Test minus
         """
-        The test means target data is right or wrong with the logic code rule
-        Bronze rule: 1-1 with source data
+        The test means target data is right or wrong and data is loaded enough or not
         """
-        minus_df = target_df.subtract(source_df)
+        minus_df = source_df.subtract(target_df)
         if  minus_df.isEmpty():
             print("===== ✅ Passed the minus data test...=====")
             tests_passed += 1

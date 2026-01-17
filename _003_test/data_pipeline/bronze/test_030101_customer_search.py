@@ -47,8 +47,7 @@ def test_030101_customer_search(etl_date=None):
         
         # Test minus
         """
-        The test means target data is right or wrong with the logic code rule
-        Bronze rule: 1-1 with source data
+        The test means target data is right or wrong and data is loaded enough or not
         """
         minus_df = target_data.subtract(source_data)
         if  minus_df.isEmpty():
