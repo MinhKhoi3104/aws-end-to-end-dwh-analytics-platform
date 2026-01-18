@@ -3,7 +3,6 @@ current_dir = os.path.dirname(__file__)
 config_path = os.path.join(current_dir, '..','..')
 config_path = os.path.abspath(config_path)
 sys.path.insert(0, config_path)
-from _01_config.jar_paths import *
 from _02_utils.utils import *
 from _02_utils.surrogate_key_registry import *
 from datetime import date
@@ -142,17 +141,19 @@ def _030302_dim_category_append(etl_date=None):
         );"""
         execute_sql_ddl(spark,sql_query)
 
+        # Load to Redshift
         """
         Read data from iceberg and insert to Redshift
         """
+        # Read data from iceberg
+        ib_df = spark.sql("SELECT * FROM iceberg.gold.dim_category")
 
-        # Load to Redshift
         if insert_records_count > 0:
 
             print(f'===== The number of insert records: {insert_records_count} =====')
 
             # LOAD
-            write_to_redshift(insert_df, "gold.dim_category","append")
+            write_to_redshift(ib_df, "gold.dim_category","overwrite")
             print("===== ✅ Completely insert new records into Readshift: gold.dim_category! =====")
 
         else:
