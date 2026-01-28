@@ -22,9 +22,23 @@ SELECT
 
     CASE
         WHEN fact.user_id = '00000000' THEN 'guest'
-        WHEN bridge.user_id IS NOT NULL THEN 'plan'
+
+        WHEN EXISTS (
+            SELECT 1
+            FROM {{ source('gold', 'bridge_user_plan') }} b
+            WHERE b.user_id = fact.user_id
+            AND to_date(b.first_effective_date, 'YYYY-MM-DD')
+                <= fact.datetime_log::date
+            AND (
+                    b.recent_effective_date IS NULL
+                    OR to_date(b.recent_effective_date, 'YYYY-MM-DD')
+                    >= fact.datetime_log::date
+            )
+        ) THEN 'plan'
+
         ELSE 'noplan'
     END AS user_state_at_search,
+
 
     platform.device_type,
     network.proxy_isp AS network_name,
@@ -46,10 +60,6 @@ LEFT JOIN {{ source('gold', 'dim_platform') }} platform
 
 LEFT JOIN {{ source('gold', 'dim_network') }} network
     ON fact.network_key = network.network_key
-
-LEFT JOIN {{ source('gold', 'bridge_user_plan') }} bridge
-    ON fact.user_id = bridge.user_id
-    AND bridge.is_effective = 1
 
 LEFT JOIN {{ source('gold', 'dim_category') }} main_cat
     ON fact.main_keyword_category = main_cat.category_key

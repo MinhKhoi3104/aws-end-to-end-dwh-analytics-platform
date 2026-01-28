@@ -17,7 +17,7 @@ search_user_month AS (
     FROM {{ source('gold', 'fact_customer_search') }} fact
     JOIN dim_date_casted date_casted
         ON fact.date_key = date_casted.date_key
-    WHERE fact.action = 'enter'
+    WHERE fact.category = 'enter'
     GROUP BY 1, 2
 
 ),
